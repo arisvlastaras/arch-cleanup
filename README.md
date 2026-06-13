@@ -23,3 +23,6 @@ chmod +x arch-cleanup.sh
 ## Requirements
 
 - `pacman-contrib` (for `paccache`)
+```bash
+sudo pacman -S pacman-contrib
+```
