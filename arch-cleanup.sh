@@ -9,7 +9,7 @@ echo "==> Removing uninstalled package cache..."
 paccache -ruk0
 
 echo "==> Removing orphaned packages..."
-ORPHANS=$(pacman -Qtdq)
+ORPHANS=$(pacman -Qtdq) || true
 if [ -n "$ORPHANS" ]; then
     sudo pacman -Rns $ORPHANS
 else
