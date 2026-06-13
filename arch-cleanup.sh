@@ -2,37 +2,79 @@
 
 set -e  # stop on first error
 
-echo "==> Cleaning pacman cache (keep last 3)..."
-paccache -rk3
+# pacman cache
+read -p "Clean pacman cache? [Y/n]: " answer
+if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+	echo "Skipping..."
+else
+	echo "==> Cleaning pacman cache..." 
+	paccache -rk3
+fi
 
+#uninstalled package cache
 echo "==> Removing uninstalled package cache..."
 paccache -ruk0
 
-echo "==> Removing orphaned packages..."
-ORPHANS=$(pacman -Qtdq) || true
-if [ -n "$ORPHANS" ]; then
-    sudo pacman -Rns $ORPHANS
+#orphaned packages
+read -p "Remove orphaned packages? [Y/n]: " answer
+if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+	echo "Skipping..."
 else
-    echo "No orphans found."
+	echo "==> Removing orphaned packages..."
+	ORPHANS=$(pacman -Qtdq) || true
+	if [ -n "$ORPHANS" ]; then
+    		sudo pacman -Rns $ORPHANS
+	else
+    		echo "No orphans found."
+	fi
 fi
 
+#aur helper cache
 echo "==> Detecting aur helper..."
 if command -v paru; then
-	echo "==> Cleaning paru cache..."
-	paru -Sc --noconfirm
+	read -p "Clean paru cache? [Y/n]: " answer
+	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+		echo "Skipping..."
+	else
+		echo "==> Cleaning paru cache..."
+		paru -Sc
+	fi
 elif command -v yay; then
-	echo "==> Cleaning yay cache..."
-	yay -Sc --noconfirm
+	read -p "Clean yay cache? [Y/n]: " answer
+	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+		echo "Skipping..."
+	else
+		echo "==> Cleaning yay cache..."
+		yay -Sc
+	fi
 else
 	echo "No supported aur helpers found :("
 fi
 
-echo "==> Removing leftover pacman download temp dirs..."
-sudo rm -rf /var/cache/pacman/pkg/download-*
+#temp pacman
+read -p "Remove leftover pacman files? [Y/n]: " answer
+if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+	echo "Skipping..."
+else
+	echo "==> Removing leftover pacman download temp dirs..."
+	sudo rm -rf /var/cache/pacman/pkg/download-*
+fi
 
-echo "==> Cleaning system cache..." 
-rm -rf ~/.cache/*
+#~/.cache
+read -p "Remove leftover pacman files? [Y/n]: " answer
+if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+	echo "Skipping..."
+else
+	echo "==> Cleaning system cache..." 
+	rm -rf ~/.cache/*
+fi
 
-echo "==> Cleaning system trash..."
-rm -rf ~/.local/share/Trash/files/*
-rm -rf ~/.local/share/Trash/info/*
+#trash
+read -p "Clean trash? [Y/n]: " answer
+if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+	echo "Skipping..."
+else
+	echo "==> Cleaning system trash..."
+	rm -rf ~/.local/share/Trash/files/*
+	rm -rf ~/.local/share/Trash/info/*
+fi
