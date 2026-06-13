@@ -2,24 +2,37 @@
 
 set -e  # stop on first error
 
+NOCONFIRM=false
+
+#confirm function
+confirm() {
+	#flag check
+	if [ "$NOCONFIRM" = true ]; then
+		return 0
+	fi
+
+	#prompt
+	read -p "$1 [Y/n]: " answer
+	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+		return 1
+	fi
+	return 0
+}
+
 # pacman cache
-read -p "Clean pacman cache? [Y/n]: " answer
-if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
-	echo "Skipping..."
-else
-	echo "==> Cleaning pacman cache..." 
+if confirm "Clean pacman cache"; then
+	echo "==> Cleaning pacman cache..."
 	paccache -rk3
 fi
 
 #uninstalled package cache
-echo "==> Removing uninstalled package cache..."
-paccache -ruk0
+if confirm "Remove uninstalled package cache?"; then
+	echo "==> Removing uninstalled package cache..."
+	paccache -ruk0
+fi
 
 #orphaned packages
-read -p "Remove orphaned packages? [Y/n]: " answer
-if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
-	echo "Skipping..."
-else
+if confirm "Remove orphaned packages?"; then
 	echo "==> Removing orphaned packages..."
 	ORPHANS=$(pacman -Qtdq) || true
 	if [ -n "$ORPHANS" ]; then
@@ -32,18 +45,14 @@ fi
 #aur helper cache
 echo "==> Detecting aur helper..."
 if command -v paru; then
-	read -p "Clean paru cache? [Y/n]: " answer
-	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
-		echo "Skipping..."
-	else
-		echo "==> Cleaning paru cache..."
+	#paru
+	if confirm "Clean paru cache?"; then
+			echo "==> Cleaning paru cache..."
 		paru -Sc
 	fi
 elif command -v yay; then
-	read -p "Clean yay cache? [Y/n]: " answer
-	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
-		echo "Skipping..."
-	else
+	#yay
+	if confirm "Clean yay cache?"; then
 		echo "==> Cleaning yay cache..."
 		yay -Sc
 	fi
@@ -52,28 +61,19 @@ else
 fi
 
 #temp pacman
-read -p "Remove leftover pacman files? [Y/n]: " answer
-if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
-	echo "Skipping..."
-else
+if confirm "Remove lefrover pacman files?"; then
 	echo "==> Removing leftover pacman download temp dirs..."
 	sudo rm -rf /var/cache/pacman/pkg/download-*
 fi
 
 #~/.cache
-read -p "Remove leftover pacman files? [Y/n]: " answer
-if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
-	echo "Skipping..."
-else
+if confirm "Clean system cache?"; then
 	echo "==> Cleaning system cache..." 
 	rm -rf ~/.cache/*
 fi
 
 #trash
-read -p "Clean trash? [Y/n]: " answer
-if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
-	echo "Skipping..."
-else
+if confirm "Clean system trash?"; then
 	echo "==> Cleaning system trash..."
 	rm -rf ~/.local/share/Trash/files/*
 	rm -rf ~/.local/share/Trash/info/*
