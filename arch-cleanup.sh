@@ -22,5 +22,9 @@ paru -Sc --noconfirm
 echo "==> Removing leftover pacman download temp dirs..."
 sudo rm -rf /var/cache/pacman/pkg/download-*
 
-echo "==> ~/.cache usage:"
-du -sh ~/.cache/*
+echo "==> Cleaning system cache..." 
+rm -rf ~/.cache/*
+
+echo "==> Cleaning system trash..."
+rm -rf ~/.local/share/Trash/files/*
+rm -rf ~/.local/share/Trash/info/*

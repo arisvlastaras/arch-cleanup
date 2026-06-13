@@ -9,7 +9,7 @@ A simple cleanup script for Arch-based systems
 - Removes orphaned packages
 - Cleans paru AUR cache
 - Deletes leftover pacman temp directories
-- Shows ~/.cache usage
+- Cleans system cache and system trash
 
 ## Usage
 
