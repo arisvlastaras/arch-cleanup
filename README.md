@@ -11,18 +11,32 @@ A simple cleanup script for Arch-based systems
 - Deletes leftover pacman temp directories
 - Cleans system cache and system trash
 
-## Usage
+## Requirements
 
+- `pacman-contrib` (for `paccache`)
+```bash
+sudo pacman -S pacman-contrib
+```
+
+## Installation
+
+- Clone and run directly:
 ```bash
 git clone https://github.com/yourusername/arch-cleanup.git
 cd arch-cleanup
 chmod +x arch-cleanup.sh
 ./arch-cleanup.sh
 ```
-
-## Requirements
-
-- `pacman-contrib` (for `paccache`)
+- Or copy to `/usr/local/bin/` for global access:
 ```bash
-sudo pacman -S pacman-contrib
+git clone https://github.com/yourusername/arch-cleanup.git
+cd arch-cleanup
+sudo cp arch-cleanup.sh /usr/local/bin/arch-cleanup
+sudo chmod +x /usr/local/bin/arch-cleanup
+```
+
+## Usage
+```bash
+arch-cleanup    # interactive
+arch-cleanup    # noconfirm
 ```
