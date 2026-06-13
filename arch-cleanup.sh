@@ -16,8 +16,16 @@ else
     echo "No orphans found."
 fi
 
-echo "==> Cleaning paru cache..."
-paru -Sc --noconfirm
+echo "==> Detecting aur helper..."
+if command -v paru; then
+	echo "==> Cleaning paru cache..."
+	paru -Sc --noconfirm
+elif command -v yay; then
+	echo "==> Cleaning yay cache..."
+	yay -Sc --noconfirm
+else
+	echo "No supported aur helpers found :("
+fi
 
 echo "==> Removing leftover pacman download temp dirs..."
 sudo rm -rf /var/cache/pacman/pkg/download-*

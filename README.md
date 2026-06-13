@@ -7,7 +7,7 @@ A simple cleanup script for Arch-based systems
 - Clears old pacman package cache (keeps last 3)
 - Removes uninstalled package cache
 - Removes orphaned packages
-- Cleans paru AUR cache
+- Cleans paru/yay AUR cache
 - Deletes leftover pacman temp directories
 - Cleans system cache and system trash
 
