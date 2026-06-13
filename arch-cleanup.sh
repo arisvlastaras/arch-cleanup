@@ -3,6 +3,18 @@
 set -e  # stop on first error
 
 NOCONFIRM=false
+while getopts "y" opt; do
+	case $opt in
+		y) NOCONFIRM=true ;;
+		*) echo "Usage: $0 [-y]"; exit 1 ;;
+	esac
+done
+
+if [ "$NOCONFIRM" = true ]; then
+	AUR_HELPER_FLAG="--noconfirm"
+else
+	AUR_HELPER_FLAG=""
+fi
 
 #confirm function
 confirm() {
@@ -47,21 +59,21 @@ echo "==> Detecting aur helper..."
 if command -v paru; then
 	#paru
 	if confirm "Clean paru cache?"; then
-			echo "==> Cleaning paru cache..."
-		paru -Sc
+		echo "==> Cleaning paru cache..."
+		paru -Sc $AUR_HELPER_FLAG
 	fi
 elif command -v yay; then
 	#yay
 	if confirm "Clean yay cache?"; then
 		echo "==> Cleaning yay cache..."
-		yay -Sc
+		yay -Sc $AUR_HELPER_FLAG
 	fi
 else
 	echo "No supported aur helpers found :("
 fi
 
 #temp pacman
-if confirm "Remove lefrover pacman files?"; then
+if confirm "Remove leftover pacman files?"; then
 	echo "==> Removing leftover pacman download temp dirs..."
 	sudo rm -rf /var/cache/pacman/pkg/download-*
 fi
