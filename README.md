@@ -10,6 +10,7 @@ A simple cleanup script for Arch-based systems
 - Cleans paru/yay AUR cache
 - Deletes leftover pacman temp directories
 - Cleans system cache and system trash
+- Calculates size to be freed before committing
 
 ## Requirements
 
