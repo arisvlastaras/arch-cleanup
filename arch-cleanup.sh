@@ -31,19 +31,22 @@ confirm() {
 	return 0
 }
 
-# display total space to be freed
+# display directory space to be freed
 get_size() {
     du -sb "$1" 2>/dev/null | cut -f1
 }
 convert_human() {
 	numfmt --to=iec $1
 }
-SIZE_BEFORE=$(( \
+DIRSIZE=$(( \
 	$(get_size /var/cache/pacman/pkg/download-*) + \
        	$(get_size ~/.cache) + \
 	$(get_size ~/.local/share/Trash)  \
 ))
-echo "Total directory space to be freed: $(convert_human $SIZE_BEFORE)"
+echo "Total directory space to be freed: $(convert_human $DIRSIZE)"
+
+# get total size of system
+SIZE_BEFORE=$(df --output=used -B1 / | tail -1)
 
 # pacman cache
 if confirm "Clean pacman cache"; then
@@ -104,3 +107,8 @@ if confirm "Clean system trash?"; then
 	rm -rf ~/.local/share/Trash/files/*
 	rm -rf ~/.local/share/Trash/info/*
 fi
+
+# readout size
+SIZE_AFTER=$(df --output=used -B1 / | tail -1)
+SIZE_FREED=$(( SIZE_BEFORE - SIZE_AFTER ))
+echo "==> Total space freed: $(convert_human $SIZE_FREED)"
