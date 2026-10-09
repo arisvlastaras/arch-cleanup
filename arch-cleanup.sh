@@ -10,7 +10,7 @@ CACHE_AGE=30
 
 usage() {
 	echo "Usage: $0 [-y] [-n] [-c LEVEL] [-h]"
-	echo "  -y        don't ask for confirmation"
+	echo "  -y        don't ask, run every step without the checklist"
 	echo "  -n        dry run, show what would be removed without removing it"
 	echo "  -c LEVEL  how much of ~/.cache to remove:"
 	echo "              low     files older than $CACHE_AGE days, keep shader caches"
@@ -52,23 +52,29 @@ if [ -e /var/lib/pacman/db.lck ]; then
 	exit 1
 fi
 
-if [ "$NOCONFIRM" = true ]; then
-	NOCONFIRM_FLAG=(--noconfirm)
-	FLATPAK_FLAG=(-y)
+# checklist in a terminal, plain Y/n prompts otherwise (e.g. piped input)
+if [ "$NOCONFIRM" = false ] && [ -t 0 ] && [ -t 1 ]; then
+	USE_TUI=true
 else
-	NOCONFIRM_FLAG=()
-	FLATPAK_FLAG=()
+	USE_TUI=false
 fi
 
 #confirm function
+# usage: confirm KEY PROMPT, KEY is the step's checklist item
 confirm() {
+	#checklist selection
+	if [ "$USE_TUI" = true ]; then
+		[ "${SELECTED[$1]}" = 1 ]
+		return
+	fi
+
 	#flag check
 	if [ "$NOCONFIRM" = true ]; then
 		return 0
 	fi
 
 	#prompt
-	read -rp "$1 [Y/n]: " answer
+	read -rp "$2 [Y/n]: " answer
 	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
 		return 1
 	fi
@@ -169,14 +175,179 @@ for dir in "${TRASH_DIRS[@]}"; do
 	TRASH_CONTENTS+=("$dir"/files/* "$dir"/info/* "$dir"/expunged/*)
 done
 
-DIRSIZE=$(( \
-	$(get_size \
-		/var/cache/pacman/pkg/download-* \
-		"${TRASH_CONTENTS[@]}" \
-		/var/lib/systemd/coredump/*) + \
-	$(cache_size) \
-))
-echo "Total directory space to be freed: $(convert_human "$DIRSIZE")"
+if command -v paru >/dev/null; then
+	AUR_HELPER=paru
+elif command -v yay >/dev/null; then
+	AUR_HELPER=yay
+else
+	AUR_HELPER=
+fi
+
+# checklist items, only the steps that apply to this system
+ITEMS=(pacman uninstalled orphans)
+[ -n "$AUR_HELPER" ] && ITEMS+=(aur)
+command -v flatpak >/dev/null && ITEMS+=(flatpak)
+ITEMS+=(pacman_tmp coredumps cache trash)
+
+item_label() {
+	case $1 in
+		pacman) echo "Clean pacman cache (keep last 3)" ;;
+		uninstalled) echo "Remove uninstalled package cache" ;;
+		orphans) echo "Remove orphaned packages" ;;
+		aur) echo "Clean $AUR_HELPER cache" ;;
+		flatpak) echo "Remove unused flatpak runtimes" ;;
+		pacman_tmp) echo "Remove leftover pacman files" ;;
+		coredumps) echo "Remove systemd coredumps" ;;
+		cache) echo "Clean ~/.cache (level: $CACHE_LEVEL)" ;;
+		trash) echo "Clean system trash" ;;
+	esac
+}
+
+# everything is ticked to start with, like answering Y to every prompt
+declare -A SELECTED
+for key in "${ITEMS[@]}"; do
+	SELECTED[$key]=1
+done
+
+# bytes freed per item, where it can be known upfront
+declare -A SIZES CACHE_SIZES
+SIZES[pacman_tmp]=$(get_size /var/cache/pacman/pkg/download-*)
+SIZES[coredumps]=$(get_size /var/lib/systemd/coredump/*)
+SIZES[trash]=$(get_size "${TRASH_CONTENTS[@]}")
+# ~/.cache size at CACHE_LEVEL, each level is measured once
+update_cache_size() {
+	if [ -z "${CACHE_SIZES[$CACHE_LEVEL]}" ]; then
+		CACHE_SIZES[$CACHE_LEVEL]=$(cache_size)
+	fi
+	SIZES[cache]=${CACHE_SIZES[$CACHE_LEVEL]}
+}
+update_cache_size
+
+# bytes freed by the ticked items
+selected_size() {
+	local key total=0
+	for key in "${ITEMS[@]}"; do
+		[ "${SELECTED[$key]}" = 1 ] && total=$(( total + ${SIZES[$key]:-0} ))
+	done
+	echo "$total"
+}
+
+# checklist ui, arrow keys or j/k to move, space to tick, enter to run
+# rows are the ITEMS, then the no-confirm option
+CACHE_LEVELS=(low medium high)
+NOCONFIRM_ROW=${#ITEMS[@]}
+ROWS=$(( ${#ITEMS[@]} + 1 ))
+
+# usage: draw_row ROW TICKED LABEL [SIZE]
+draw_row() {
+	local mark=' ' line
+	[ "$2" = 1 ] && mark=x
+	printf -v line ' [%s] %-42s %7s ' "$mark" "$3" "$4"
+	if [ "$1" -eq "$CURSOR" ]; then
+		printf '\e[7m%s\e[0m\n' "$line"
+	else
+		printf '%s\n' "$line"
+	fi
+}
+
+draw_menu() {
+	local i key size
+	printf '\e[H\e[J'
+	if [ "$DRYRUN" = true ]; then
+		printf 'arch-cleanup (dry run, nothing will be removed)\n\n'
+	else
+		printf 'arch-cleanup\n\n'
+	fi
+	for i in "${!ITEMS[@]}"; do
+		key=${ITEMS[i]}
+		size=
+		[ -n "${SIZES[$key]}" ] && size=$(convert_human "${SIZES[$key]}")
+		draw_row "$i" "${SELECTED[$key]}" "$(item_label "$key")" "$size"
+	done
+	printf '\n'
+	draw_row "$NOCONFIRM_ROW" "$([ "$NOCONFIRM" = true ] && echo 1)" "No-confirm (package managers won't ask)"
+	printf '\n Selected: %s, plus package caches\n\n' "$(convert_human "$(selected_size)")"
+	printf ' up/down move  space tick  a all/none  left/right cache level\n'
+	printf ' enter run  q quit\n'
+}
+
+tui_restore() {
+	printf '\e[?25h\e[?1049l'  # show cursor, leave alternate screen
+}
+
+run_menu() {
+	local key rest i all
+	CURSOR=0
+	trap tui_restore EXIT
+	printf '\e[?1049h\e[?25l'  # alternate screen, hide cursor
+	while true; do
+		draw_menu
+		IFS= read -rsn1 key
+		if [ "$key" = $'\e' ]; then
+			IFS= read -rsn2 -t 0.05 rest || true
+			key+=$rest
+		fi
+		case $key in
+			$'\e[A'|k) CURSOR=$(( (CURSOR + ROWS - 1) % ROWS )) ;;
+			$'\e[B'|j) CURSOR=$(( (CURSOR + 1) % ROWS )) ;;
+			' ')
+				if [ "$CURSOR" -eq "$NOCONFIRM_ROW" ]; then
+					[ "$NOCONFIRM" = true ] && NOCONFIRM=false || NOCONFIRM=true
+				else
+					key=${ITEMS[CURSOR]}
+					SELECTED[$key]=$(( 1 - ${SELECTED[$key]} ))
+				fi
+				;;
+			a)
+				# untick all if everything is ticked, otherwise tick all
+				all=0
+				for i in "${ITEMS[@]}"; do
+					[ "${SELECTED[$i]}" = 1 ] || all=1
+				done
+				for i in "${ITEMS[@]}"; do
+					SELECTED[$i]=$all
+				done
+				;;
+			$'\e[C'|$'\e[D'|l|h)
+				for i in "${!CACHE_LEVELS[@]}"; do
+					[ "${CACHE_LEVELS[i]}" = "$CACHE_LEVEL" ] && break
+				done
+				case $key in
+					$'\e[C'|l) i=$(( i < 2 ? i + 1 : 2 )) ;;
+					*) i=$(( i > 0 ? i - 1 : 0 )) ;;
+				esac
+				CACHE_LEVEL=${CACHE_LEVELS[i]}
+				update_cache_size
+				;;
+			'') break ;;  # enter
+			q|Q) tui_restore; trap - EXIT; echo "Aborted, nothing was removed."; exit 0 ;;
+		esac
+	done
+	tui_restore
+	trap - EXIT
+}
+
+if [ "$USE_TUI" = true ]; then
+	run_menu
+	ANY_SELECTED=false
+	for key in "${ITEMS[@]}"; do
+		[ "${SELECTED[$key]}" = 1 ] && ANY_SELECTED=true
+	done
+	if [ "$ANY_SELECTED" = false ]; then
+		echo "Nothing selected."
+		exit 0
+	fi
+fi
+
+if [ "$NOCONFIRM" = true ]; then
+	NOCONFIRM_FLAG=(--noconfirm)
+	FLATPAK_FLAG=(-y)
+else
+	NOCONFIRM_FLAG=()
+	FLATPAK_FLAG=()
+fi
+
+echo "Total directory space to be freed: $(convert_human "$(selected_size)")"
 
 # ask for the sudo password once upfront
 if [ "$DRYRUN" = false ]; then
@@ -187,7 +358,7 @@ fi
 SIZE_BEFORE=$(df --output=used -B1 / | tail -1)
 
 # pacman cache
-if confirm "Clean pacman cache?"; then
+if confirm pacman "Clean pacman cache?"; then
 	echo "==> Cleaning pacman cache..."
 	if [ "$DRYRUN" = true ]; then
 		paccache -dk3 || step_failed "pacman cache"
@@ -197,7 +368,7 @@ if confirm "Clean pacman cache?"; then
 fi
 
 #uninstalled package cache
-if confirm "Remove uninstalled package cache?"; then
+if confirm uninstalled "Remove uninstalled package cache?"; then
 	echo "==> Removing uninstalled package cache..."
 	if [ "$DRYRUN" = true ]; then
 		paccache -duk0 || step_failed "uninstalled package cache"
@@ -207,7 +378,7 @@ if confirm "Remove uninstalled package cache?"; then
 fi
 
 #orphaned packages
-if confirm "Remove orphaned packages?"; then
+if confirm orphans "Remove orphaned packages?"; then
 	echo "==> Removing orphaned packages..."
 	mapfile -t ORPHANS < <(pacman -Qtdq)
 	if [ ${#ORPHANS[@]} -gt 0 ]; then
@@ -218,45 +389,37 @@ if confirm "Remove orphaned packages?"; then
 fi
 
 #aur helper cache (-a: AUR only, the pacman cache is handled by paccache above)
-echo "==> Detecting aur helper..."
-if command -v paru >/dev/null; then
-	#paru
-	if confirm "Clean paru cache?"; then
-		echo "==> Cleaning paru cache..."
-		run paru -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "paru cache"
+if [ -n "$AUR_HELPER" ]; then
+	if confirm aur "Clean $AUR_HELPER cache?"; then
+		echo "==> Cleaning $AUR_HELPER cache..."
+		run "$AUR_HELPER" -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "$AUR_HELPER cache"
 	fi
-elif command -v yay >/dev/null; then
-	#yay
-	if confirm "Clean yay cache?"; then
-		echo "==> Cleaning yay cache..."
-		run yay -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "yay cache"
-	fi
-else
+elif [ "$USE_TUI" = false ]; then
 	echo "No supported aur helpers found :("
 fi
 
 #flatpak
 if command -v flatpak >/dev/null; then
-	if confirm "Remove unused flatpak runtimes?"; then
+	if confirm flatpak "Remove unused flatpak runtimes?"; then
 		echo "==> Removing unused flatpak runtimes..."
 		run flatpak uninstall --unused "${FLATPAK_FLAG[@]}" || step_failed "flatpak"
 	fi
 fi
 
 #temp pacman
-if confirm "Remove leftover pacman files?"; then
+if confirm pacman_tmp "Remove leftover pacman files?"; then
 	echo "==> Removing leftover pacman download temp dirs..."
 	remove --sudo /var/cache/pacman/pkg/download-* || step_failed "leftover pacman files"
 fi
 
 #coredumps
-if confirm "Remove systemd coredumps?"; then
+if confirm coredumps "Remove systemd coredumps?"; then
 	echo "==> Removing systemd coredumps..."
 	remove --sudo /var/lib/systemd/coredump/* || step_failed "coredumps"
 fi
 
 #~/.cache
-if confirm "Clean system cache (level: $CACHE_LEVEL)?"; then
+if confirm cache "Clean system cache (level: $CACHE_LEVEL)?"; then
 	echo "==> Cleaning system cache (level: $CACHE_LEVEL)..."
 	case $CACHE_LEVEL in
 		low)
@@ -277,7 +440,7 @@ if confirm "Clean system cache (level: $CACHE_LEVEL)?"; then
 fi
 
 #trash
-if confirm "Clean system trash?"; then
+if confirm trash "Clean system trash?"; then
 	echo "==> Cleaning system trash (${#TRASH_DIRS[@]} location(s))..."
 	remove "${TRASH_CONTENTS[@]}" || step_failed "system trash"
 fi
