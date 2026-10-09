@@ -7,7 +7,7 @@ A simple cleanup script for Arch-based systems
 - Clears old pacman package cache (keeps last 3)
 - Removes uninstalled package cache
 - Removes orphaned packages
-- Cleans paru/yay AUR cache (AUR only, the pacman cache is handled by `paccache`)
+- Cleans the AUR cache of paru and/or yay, whichever are installed (AUR only, the pacman cache is handled by `paccache`)
 - Removes unused flatpak runtimes (if flatpak is installed)
 - Deletes leftover pacman temp directories
 - Removes systemd coredumps
@@ -53,18 +53,20 @@ arch-cleanup -h    # help
 
 ### Checklist
 
-Run in a terminal without `-y`, the script opens a checklist of the steps that apply to your system (the AUR and flatpak steps only show up if paru/yay or flatpak is installed). Everything starts ticked. Below the steps is a no-confirm option, unticked by default, which stops pacman, the AUR helper and flatpak from asking for confirmation (the same as `-y` for the ticked steps).
+Run in a terminal without `-y`, the script opens a checklist of the steps that apply to your system (there is an AUR step for each of paru and yay that is installed, and the flatpak step only shows up if flatpak is installed). Everything starts ticked. Below the steps is a no-confirm option, unticked by default, which stops pacman, the AUR helper and flatpak from asking for confirmation (the same as `-y` for the ticked steps).
 
 | Key | Action |
 |---|---|
 | `↑`/`↓` or `k`/`j` | move |
 | `space` | tick/untick |
 | `a` | tick/untick all |
-| `←`/`→` or `h`/`l` | change the `~/.cache` level |
+| `←`/`→` or `h`/`l` | move the `~/.cache` level slider |
 | `enter` | run the ticked steps |
 | `q` | quit without removing anything |
 
-Steps with a known size show it next to them, and the total for the ticked steps is shown below the list. The package cache steps (`paccache`, orphans, AUR, flatpak) aren't included in that total. When input isn't a terminal (e.g. piped), the script falls back to Y/n prompts.
+Steps with a known size show it next to them, and a gauge above the list shows the total for the ticked steps out of everything the list can free. The package cache steps (`paccache`, orphans, AUR, flatpak) aren't included in that total. When input isn't a terminal (e.g. piped), the script falls back to Y/n prompts.
+
+Output is colored when it goes to a terminal. Set `NO_COLOR=1` to turn colors off. Without a UTF-8 locale, the checklist uses plain ASCII characters.
 
 ### Cache levels (`-c`)
 
