@@ -7,7 +7,7 @@ A simple cleanup script for Arch-based systems
 - Clears old pacman package cache (keeps last 3)
 - Removes uninstalled package cache
 - Removes orphaned packages
-- Cleans paru/yay AUR cache
+- Cleans paru/yay AUR cache (AUR only, the pacman cache is handled by `paccache`)
 - Removes unused flatpak runtimes (if flatpak is installed)
 - Deletes leftover pacman temp directories
 - Removes systemd coredumps
@@ -54,8 +54,8 @@ arch-cleanup -h    # help
 
 | Level | Removes from `~/.cache` |
 |---|---|
-| `low` (default) | files not modified in 30 days, shader caches kept |
-| `medium` | everything except shader caches |
+| `low` | files not modified in 30 days, shader caches kept |
+| `medium` (default) | everything except shader caches |
 | `high` | everything |
 
 The kept shader caches and the 30 day cutoff are set by `KEEP_CACHES` and `CACHE_AGE` at the top of the script.
@@ -63,3 +63,5 @@ The kept shader caches and the 30 day cutoff are set by `KEEP_CACHES` and `CACHE
 ### Safety checks
 
 The script refuses to run as root, exits if `paccache` is missing, and exits if pacman is currently running (`/var/lib/pacman/db.lck` exists). It asks for the sudo password once at the start.
+
+If a cleanup step fails, the script carries on with the rest, lists the failed steps at the end and exits with status 1.
