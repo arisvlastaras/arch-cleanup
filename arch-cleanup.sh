@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -e  # stop on first error
+set -e  # stop on setup errors, cleanup steps record failures and carry on
 shopt -s nullglob dotglob  # unmatched globs expand to nothing, * matches dotfiles
 
 # ~/.cache entries kept at cache levels low and medium (shader caches are slow to rebuild)
@@ -13,15 +13,15 @@ usage() {
 	echo "  -y        don't ask for confirmation"
 	echo "  -n        dry run, show what would be removed without removing it"
 	echo "  -c LEVEL  how much of ~/.cache to remove:"
-	echo "              low     files older than $CACHE_AGE days, keep shader caches (default)"
-	echo "              medium  everything except shader caches"
+	echo "              low     files older than $CACHE_AGE days, keep shader caches"
+	echo "              medium  everything except shader caches (default)"
 	echo "              high    everything"
 	echo "  -h        show this help"
 }
 
 NOCONFIRM=false
 DRYRUN=false
-CACHE_LEVEL=low
+CACHE_LEVEL=medium
 while getopts "ync:h" opt; do
 	case $opt in
 		y) NOCONFIRM=true ;;
@@ -82,6 +82,13 @@ run() {
 	else
 		"$@"
 	fi
+}
+
+# record a cleanup step that didn't complete, so the script carries on
+FAILED=()
+step_failed() {
+	echo "    !! $1 did not complete, continuing" >&2
+	FAILED+=("$1")
 }
 
 # display directory space to be freed
@@ -183,9 +190,9 @@ SIZE_BEFORE=$(df --output=used -B1 / | tail -1)
 if confirm "Clean pacman cache?"; then
 	echo "==> Cleaning pacman cache..."
 	if [ "$DRYRUN" = true ]; then
-		paccache -dk3
+		paccache -dk3 || step_failed "pacman cache"
 	else
-		paccache -rk3
+		paccache -rk3 || step_failed "pacman cache"
 	fi
 fi
 
@@ -193,9 +200,9 @@ fi
 if confirm "Remove uninstalled package cache?"; then
 	echo "==> Removing uninstalled package cache..."
 	if [ "$DRYRUN" = true ]; then
-		paccache -duk0
+		paccache -duk0 || step_failed "uninstalled package cache"
 	else
-		paccache -ruk0
+		paccache -ruk0 || step_failed "uninstalled package cache"
 	fi
 fi
 
@@ -204,25 +211,25 @@ if confirm "Remove orphaned packages?"; then
 	echo "==> Removing orphaned packages..."
 	mapfile -t ORPHANS < <(pacman -Qtdq)
 	if [ ${#ORPHANS[@]} -gt 0 ]; then
-		run sudo pacman -Rns "${NOCONFIRM_FLAG[@]}" "${ORPHANS[@]}"
+		run sudo pacman -Rns "${NOCONFIRM_FLAG[@]}" "${ORPHANS[@]}" || step_failed "orphaned packages"
 	else
 		echo "No orphans found."
 	fi
 fi
 
-#aur helper cache
+#aur helper cache (-a: AUR only, the pacman cache is handled by paccache above)
 echo "==> Detecting aur helper..."
 if command -v paru >/dev/null; then
 	#paru
 	if confirm "Clean paru cache?"; then
 		echo "==> Cleaning paru cache..."
-		run paru -Sc "${NOCONFIRM_FLAG[@]}"
+		run paru -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "paru cache"
 	fi
 elif command -v yay >/dev/null; then
 	#yay
 	if confirm "Clean yay cache?"; then
 		echo "==> Cleaning yay cache..."
-		run yay -Sc "${NOCONFIRM_FLAG[@]}"
+		run yay -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "yay cache"
 	fi
 else
 	echo "No supported aur helpers found :("
@@ -232,20 +239,20 @@ fi
 if command -v flatpak >/dev/null; then
 	if confirm "Remove unused flatpak runtimes?"; then
 		echo "==> Removing unused flatpak runtimes..."
-		run flatpak uninstall --unused "${FLATPAK_FLAG[@]}"
+		run flatpak uninstall --unused "${FLATPAK_FLAG[@]}" || step_failed "flatpak"
 	fi
 fi
 
 #temp pacman
 if confirm "Remove leftover pacman files?"; then
 	echo "==> Removing leftover pacman download temp dirs..."
-	remove --sudo /var/cache/pacman/pkg/download-*
+	remove --sudo /var/cache/pacman/pkg/download-* || step_failed "leftover pacman files"
 fi
 
 #coredumps
 if confirm "Remove systemd coredumps?"; then
 	echo "==> Removing systemd coredumps..."
-	remove --sudo /var/lib/systemd/coredump/*
+	remove --sudo /var/lib/systemd/coredump/* || step_failed "coredumps"
 fi
 
 #~/.cache
@@ -256,15 +263,15 @@ if confirm "Clean system cache (level: $CACHE_LEVEL)?"; then
 			if [ "$DRYRUN" = true ]; then
 				echo "    [dry-run] would remove $(find_old_cache -printf '.' | wc -c) file(s) older than $CACHE_AGE days, $(convert_human "$(cache_size)")"
 			else
-				find_old_cache -delete || echo "    Some files could not be removed."
+				find_old_cache -delete || step_failed "system cache"
 			fi
 			;;
 		medium)
 			mapfile -t CACHE_ENTRIES < <(cache_entries)
-			remove "${CACHE_ENTRIES[@]}"
+			remove "${CACHE_ENTRIES[@]}" || step_failed "system cache"
 			;;
 		high)
-			remove ~/.cache/*
+			remove ~/.cache/* || step_failed "system cache"
 			;;
 	esac
 fi
@@ -272,14 +279,21 @@ fi
 #trash
 if confirm "Clean system trash?"; then
 	echo "==> Cleaning system trash (${#TRASH_DIRS[@]} location(s))..."
-	remove "${TRASH_CONTENTS[@]}"
+	remove "${TRASH_CONTENTS[@]}" || step_failed "system trash"
 fi
 
 # readout size
 if [ "$DRYRUN" = true ]; then
 	echo "==> Dry run, nothing was removed."
-	exit 0
+else
+	SIZE_AFTER=$(df --output=used -B1 / | tail -1)
+	SIZE_FREED=$(( SIZE_BEFORE - SIZE_AFTER ))
+	echo "==> Total space freed: $(convert_human "$SIZE_FREED")"
 fi
-SIZE_AFTER=$(df --output=used -B1 / | tail -1)
-SIZE_FREED=$(( SIZE_BEFORE - SIZE_AFTER ))
-echo "==> Total space freed: $(convert_human "$SIZE_FREED")"
+
+# failed steps summary
+if [ ${#FAILED[@]} -gt 0 ]; then
+	echo "==> Steps that did not complete:" >&2
+	printf '    %s\n' "${FAILED[@]}" >&2
+	exit 1
+fi
