@@ -64,7 +64,7 @@ Run in a terminal without `-y`, the script opens a checklist of the steps that a
 | `enter` | run the ticked steps |
 | `q` | quit without removing anything |
 
-Steps with a known size show it next to them, and a gauge above the list shows the total for the ticked steps out of everything the list can free. The package cache steps (`paccache`, orphans, AUR, flatpak) aren't included in that total. When input isn't a terminal (e.g. piped), the script falls back to Y/n prompts.
+Under the list, a short description explains the step at the cursor (for the `~/.cache` step, also what the selected level removes). Steps with a known size show it next to them, and a gauge above the list shows the total for the ticked steps out of everything the list can free. The package cache steps (`paccache`, orphans, AUR, flatpak) aren't included in that total. When input isn't a terminal (e.g. piped), the script falls back to Y/n prompts.
 
 Output is colored when it goes to a terminal. Set `NO_COLOR=1` to turn colors off. Without a UTF-8 locale, the checklist uses plain ASCII characters.
 
@@ -74,7 +74,7 @@ Output is colored when it goes to a terminal. Set `NO_COLOR=1` to turn colors of
 |---|---|
 | `low` | files not modified in 30 days, shader caches kept |
 | `medium` (default) | everything except shader caches |
-| `high` | everything |
+| `high` | everything, shader caches included |
 
 The kept shader caches and the 30 day cutoff are set by `KEEP_CACHES` and `CACHE_AGE` at the top of the script.
 
