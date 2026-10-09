@@ -238,37 +238,48 @@ CACHE_LEVELS=(low medium high)
 NOCONFIRM_ROW=${#ITEMS[@]}
 ROWS=$(( ${#ITEMS[@]} + 1 ))
 
+# append a line to FRAME, \e[K clears what's left of the previous frame's line
+frame_line() {
+	FRAME+=$1$'\e[K\n'
+}
+
 # usage: draw_row ROW TICKED LABEL [SIZE]
 draw_row() {
 	local mark=' ' line
 	[ "$2" = 1 ] && mark=x
 	printf -v line ' [%s] %-42s %7s ' "$mark" "$3" "$4"
 	if [ "$1" -eq "$CURSOR" ]; then
-		printf '\e[7m%s\e[0m\n' "$line"
+		frame_line $'\e[7m'"$line"$'\e[0m'
 	else
-		printf '%s\n' "$line"
+		frame_line "$line"
 	fi
 }
 
+# the frame is built in FRAME and written in one go over the old one,
+# clearing the screen first would make it flicker
 draw_menu() {
 	local i key size
-	printf '\e[H\e[J'
+	FRAME=$'\e[H'
 	if [ "$DRYRUN" = true ]; then
-		printf 'arch-cleanup (dry run, nothing will be removed)\n\n'
+		frame_line 'arch-cleanup (dry run, nothing will be removed)'
 	else
-		printf 'arch-cleanup\n\n'
+		frame_line 'arch-cleanup'
 	fi
+	frame_line ''
 	for i in "${!ITEMS[@]}"; do
 		key=${ITEMS[i]}
 		size=
 		[ -n "${SIZES[$key]}" ] && size=$(convert_human "${SIZES[$key]}")
 		draw_row "$i" "${SELECTED[$key]}" "$(item_label "$key")" "$size"
 	done
-	printf '\n'
+	frame_line ''
 	draw_row "$NOCONFIRM_ROW" "$([ "$NOCONFIRM" = true ] && echo 1)" "No-confirm (package managers won't ask)"
-	printf '\n Selected: %s, plus package caches\n\n' "$(convert_human "$(selected_size)")"
-	printf ' up/down move  space tick  a all/none  left/right cache level\n'
-	printf ' enter run  q quit\n'
+	frame_line ''
+	frame_line " Selected: $(convert_human "$(selected_size)"), plus package caches"
+	frame_line ''
+	frame_line ' up/down move  space tick  a all/none  left/right cache level'
+	frame_line ' enter run  q quit'
+	printf '%s\e[J' "$FRAME"  # \e[J clears anything below the frame
 }
 
 tui_restore() {
