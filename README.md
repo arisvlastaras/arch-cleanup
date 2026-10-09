@@ -8,9 +8,12 @@ A simple cleanup script for Arch-based systems
 - Removes uninstalled package cache
 - Removes orphaned packages
 - Cleans paru/yay AUR cache
+- Removes unused flatpak runtimes (if flatpak is installed)
 - Deletes leftover pacman temp directories
-- Cleans system cache and system trash
+- Removes systemd coredumps
+- Cleans system cache and system trash (including trash on mounted drives)
 - Calculates size to be freed before committing
+- Dry-run mode to preview what would be removed
 
 ## Requirements
 
@@ -38,6 +41,9 @@ sudo chmod +x /usr/local/bin/arch-cleanup
 
 ## Usage
 ```bash
-arch-cleanup    # interactive
-arch-cleanup -y # noconfirm
+arch-cleanup       # interactive
+arch-cleanup -y    # noconfirm
+arch-cleanup -n    # dry run, nothing is removed
+arch-cleanup -n -y # dry run without prompts
+arch-cleanup -h    # help
 ```
