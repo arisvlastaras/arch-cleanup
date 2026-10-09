@@ -8,6 +8,34 @@ KEEP_CACHES=(mesa_shader_cache mesa_shader_cache_db nvidia 'qtshadercache-*')
 # at cache level low, only remove files not modified in this many days
 CACHE_AGE=30
 
+# colors when writing to a terminal, NO_COLOR turns them off (https://no-color.org)
+C_RESET= C_BOLD= C_DIM= C_ACCENT= C_GREEN= C_YELLOW= C_ERR= C_HANDLE= C_BRISTLE=
+C_CURSOR=$'\e[7m'  # reverse video highlight without colors
+if [ -t 1 ] && [ -z "$NO_COLOR" ] && [ "$TERM" != dumb ]; then
+	case $COLORTERM in
+		truecolor|24bit) BLUE='2;23;147;209' ;;  # arch blue #1793d1
+		*) BLUE='5;32' ;;  # closest 256-color match
+	esac
+	C_RESET=$'\e[0m'
+	C_BOLD=$'\e[1m'
+	C_DIM=$'\e[2m'
+	C_ACCENT=$'\e[38;'$BLUE'm'
+	C_GREEN=$'\e[32m'
+	C_YELLOW=$'\e[33m'
+	[ -t 2 ] && C_ERR=$'\e[1;31m'
+	C_CURSOR=$'\e[1;97;48;'$BLUE'm'
+	C_HANDLE=$'\e[38;5;137m'
+	C_BRISTLE=$'\e[38;5;222m'
+fi
+
+# step header, pacman style
+msg() {
+	echo "$C_ACCENT$C_BOLD==>$C_RESET$C_BOLD $*$C_RESET"
+}
+error() {
+	echo "${C_ERR}error:${C_ERR:+$C_RESET} $*" >&2
+}
+
 usage() {
 	echo "Usage: $0 [-y] [-n] [-c LEVEL] [-h]"
 	echo "  -y        don't ask, run every step without the checklist"
@@ -34,20 +62,20 @@ done
 
 case $CACHE_LEVEL in
 	low|medium|high) ;;
-	*) echo "Invalid cache level: $CACHE_LEVEL" >&2; usage >&2; exit 1 ;;
+	*) error "Invalid cache level: $CACHE_LEVEL"; usage >&2; exit 1 ;;
 esac
 
 # safety checks
 if [ "$EUID" -eq 0 ]; then
-	echo "Don't run as root, run as your normal user (sudo is used where needed)." >&2
+	error "Don't run as root, run as your normal user (sudo is used where needed)."
 	exit 1
 fi
 if ! command -v paccache >/dev/null; then
-	echo "paccache not found, install it with: sudo pacman -S pacman-contrib" >&2
+	error "paccache not found, install it with: sudo pacman -S pacman-contrib"
 	exit 1
 fi
 if [ -e /var/lib/pacman/db.lck ]; then
-	echo "pacman is running (/var/lib/pacman/db.lck exists), try again when it's done." >&2
+	error "pacman is running (/var/lib/pacman/db.lck exists), try again when it's done."
 	echo "If no pacman is running, remove the stale lock with: sudo rm /var/lib/pacman/db.lck" >&2
 	exit 1
 fi
@@ -74,7 +102,7 @@ confirm() {
 	fi
 
 	#prompt
-	read -rp "$2 [Y/n]: " answer
+	read -rp "$C_ACCENT$C_BOLD::$C_RESET$C_BOLD $2$C_RESET [Y/n]: " answer
 	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
 		return 1
 	fi
@@ -84,7 +112,7 @@ confirm() {
 # run a command, or just print it in dry-run mode
 run() {
 	if [ "$DRYRUN" = true ]; then
-		echo "    [dry-run] $*"
+		echo "    $C_YELLOW[dry-run]$C_RESET $*"
 	else
 		"$@"
 	fi
@@ -93,7 +121,7 @@ run() {
 # record a cleanup step that didn't complete, so the script carries on
 FAILED=()
 step_failed() {
-	echo "    !! $1 did not complete, continuing" >&2
+	echo "    $C_ERR!!${C_ERR:+$C_RESET} $1 did not complete, continuing" >&2
 	FAILED+=("$1")
 }
 
@@ -118,11 +146,11 @@ remove() {
 		shift
 	fi
 	if [ $# -eq 0 ]; then
-		echo "    Nothing to remove."
+		echo "    ${C_DIM}Nothing to remove.$C_RESET"
 		return 0
 	fi
 	if [ "$DRYRUN" = true ]; then
-		echo "    [dry-run] would remove $# item(s), $(convert_human "$(get_size "$@")")"
+		echo "    $C_YELLOW[dry-run]$C_RESET would remove $# item(s), $(convert_human "$(get_size "$@")")"
 	else
 		"${sudo_cmd[@]}" rm -rf -- "$@"
 	fi
@@ -175,17 +203,15 @@ for dir in "${TRASH_DIRS[@]}"; do
 	TRASH_CONTENTS+=("$dir"/files/* "$dir"/info/* "$dir"/expunged/*)
 done
 
-if command -v paru >/dev/null; then
-	AUR_HELPER=paru
-elif command -v yay >/dev/null; then
-	AUR_HELPER=yay
-else
-	AUR_HELPER=
-fi
+# every installed AUR helper gets its own step, the item key is its name
+AUR_HELPERS=()
+for helper in paru yay; do
+	command -v "$helper" >/dev/null && AUR_HELPERS+=("$helper")
+done
 
 # checklist items, only the steps that apply to this system
 ITEMS=(pacman uninstalled orphans)
-[ -n "$AUR_HELPER" ] && ITEMS+=(aur)
+ITEMS+=("${AUR_HELPERS[@]}")
 command -v flatpak >/dev/null && ITEMS+=(flatpak)
 ITEMS+=(pacman_tmp coredumps cache trash)
 
@@ -194,11 +220,11 @@ item_label() {
 		pacman) echo "Clean pacman cache (keep last 3)" ;;
 		uninstalled) echo "Remove uninstalled package cache" ;;
 		orphans) echo "Remove orphaned packages" ;;
-		aur) echo "Clean $AUR_HELPER cache" ;;
+		paru|yay) echo "Clean $1 cache" ;;
 		flatpak) echo "Remove unused flatpak runtimes" ;;
 		pacman_tmp) echo "Remove leftover pacman files" ;;
 		coredumps) echo "Remove systemd coredumps" ;;
-		cache) echo "Clean ~/.cache (level: $CACHE_LEVEL)" ;;
+		cache) echo "Clean ~/.cache" ;;
 		trash) echo "Clean system trash" ;;
 	esac
 }
@@ -238,62 +264,297 @@ CACHE_LEVELS=(low medium high)
 NOCONFIRM_ROW=${#ITEMS[@]}
 ROWS=$(( ${#ITEMS[@]} + 1 ))
 
+# glyphs need a UTF-8 locale, plain ASCII otherwise
+case ${LC_ALL:-${LC_CTYPE:-$LANG}} in
+	*[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*)
+		TICK=✓
+		SEP=' · '
+		DUST_SPECKS=(. · ˙ ,)
+		PILE='.·˙'
+		;;
+	*)
+		TICK=x
+		SEP=' - '
+		DUST_SPECKS=(. , "'" '`')
+		PILE=".,'"
+		;;
+esac
+
+# arch logo, with the title and the tools it cleans next to it
+LOGO=(
+	'      /\'
+	'     /  \'
+	'    /\   \'
+	'   /      \'
+	'  /   ,,   \'
+	' /   |  |  -\'
+	"/_-''    ''-_\\"
+)
+SUBTITLE=pacman
+for helper in "${AUR_HELPERS[@]}"; do
+	SUBTITLE+=$SEP$helper
+done
+command -v flatpak >/dev/null && SUBTITLE+=${SEP}flatpak
+SUBTITLE+=${SEP}cache${SEP}trash
+HEADER=('' "${C_BOLD}arch-cleanup$C_RESET" "$C_DIM$SUBTITLE$C_RESET")
+[ "$DRYRUN" = true ] && HEADER+=("${C_YELLOW}dry run, nothing will be removed$C_RESET")
+
+# the broom's 4 rows and the gauge row sit under the logo and a blank line,
+# animation ticks redraw only these
+BROOM_ROW=$(( ${#LOGO[@]} + 2 ))
+TICK_TIME=0.08
+
+# upright broom swinging while it walks along a track the width of the
+# checklist, sweeping the dust on the floor row
+BROOM_W=54
+BROOM_PAUSE=15  # ticks of clean track before the next sweep
+# swing frames, left, center and right: the handle's column offset from
+# BROOM_X and its glyph for each of the 3 handle rows, then where the 3-wide
+# bristles start and what they look like
+F_OFF=(-1 -2 -3  0 0 0  1 2 3)
+F_CH=('/' '/' '/'  '|' '|' '|'  '\' '\' '\')
+F_HEAD=(-5 -1 3)
+F_BRISTLES=('///' '/|\' '\\\')
+SWING=(0 0 1 1 2 2 1 1)  # frame order, each frame held for 2 ticks
+new_dust() {
+	local i
+	DUST=
+	for (( i = 0; i < BROOM_W; i++ )); do
+		if (( RANDOM % 6 == 0 )); then
+			DUST+=${DUST_SPECKS[RANDOM % ${#DUST_SPECKS[@]}]}
+		else
+			DUST+=' '
+		fi
+	done
+	BROOM_X=-6  # broom column, starts off the left edge
+	SWING_I=0
+	SWEPT=0
+}
+broom_step() {
+	local f head i
+	SWING_I=$(( (SWING_I + 1) % ${#SWING[@]} ))
+	if (( SWING_I % 2 == 0 )); then
+		BROOM_X=$(( BROOM_X + 1 ))
+	fi
+	if (( BROOM_X > BROOM_W + 5 + BROOM_PAUSE )); then
+		new_dust
+		return
+	fi
+	# the bristles clear the dust they pass over
+	f=${SWING[SWING_I]}
+	head=$(( BROOM_X + F_HEAD[f] ))
+	for (( i = head; i < head + 3; i++ )); do
+		if (( i >= 0 && i < BROOM_W )) && [ "${DUST:i:1}" != ' ' ]; then
+			DUST=${DUST:0:i}' '${DUST:i+1}
+			SWEPT=$(( SWEPT + 1 ))
+		fi
+	done
+}
+# sets BROOM_LINES, each swing flicks a puff of the swept dust out the
+# side of the bristles it swings to
+broom_lines() {
+	local f=${SWING[SWING_I]} r col i j ch color prev= out= puff=0
+	BROOM_LINES=()
+	for r in 0 1 2; do
+		col=$(( BROOM_X + F_OFF[f * 3 + r] ))
+		if (( col >= 0 && col < BROOM_W )); then
+			printf -v "BROOM_LINES[$r]" ' %*s%s' "$col" '' "$C_HANDLE${F_CH[f * 3 + r]}$C_RESET"
+		else
+			BROOM_LINES[r]=
+		fi
+	done
+	(( f != 1 )) && puff=$(( SWEPT < ${#PILE} ? SWEPT : ${#PILE} ))
+	for (( i = 0; i < BROOM_W; i++ )); do
+		j=$(( i - BROOM_X - F_HEAD[f] ))
+		if (( j >= 0 && j < 3 )); then
+			ch=${F_BRISTLES[f]:j:1} color=$C_BRISTLE
+		elif (( f == 0 && j < 0 && j >= -puff )); then
+			ch=${PILE:(-j-1):1} color=$C_DIM
+		elif (( f == 2 && j >= 3 && j < 3 + puff )); then
+			ch=${PILE:j-3:1} color=$C_DIM
+		else
+			ch=${DUST:i:1} color=$C_DIM
+		fi
+		if [ "$color" != "$prev" ]; then
+			out+=$C_RESET$color
+			prev=$color
+		fi
+		out+=$ch
+	done
+	BROOM_LINES[3]=" $out$C_RESET"
+}
+new_dust
+
+# gauge of the selected bytes out of everything the checklist can free,
+# GAUGE_PCT eases towards GAUGE_TARGET, both in percent
+GAUGE_W=20
+GAUGE_PCT=0
+GAUGE_TARGET=0
+update_gauge() {
+	local key total=0 selected
+	selected=$(selected_size)
+	for key in "${ITEMS[@]}"; do
+		total=$(( total + ${SIZES[$key]:-0} ))
+	done
+	if (( total > 0 )); then
+		GAUGE_TARGET=$(( (selected * 100 + total / 2) / total ))
+	else
+		GAUGE_TARGET=0
+	fi
+	GAUGE_TEXT="$(convert_human "$selected") of $(convert_human "$total")"
+}
+gauge_step() {
+	local diff=$(( GAUGE_TARGET - GAUGE_PCT )) step
+	step=$(( diff / 3 ))
+	(( step == 0 && diff > 0 )) && step=1
+	(( step == 0 && diff < 0 )) && step=-1
+	GAUGE_PCT=$(( GAUGE_PCT + step ))
+}
+# sets GAUGE_LINE, [=======>.....]  35% with no arrow head when empty or full
+gauge_line() {
+	local cells=$(( GAUGE_PCT * GAUGE_W / 100 )) bar empty pct  # full only at 100%
+	printf -v bar '%*s' "$cells" ''
+	bar=${bar// /=}
+	(( cells > 0 && cells < GAUGE_W )) && bar=${bar%=}'>'
+	printf -v empty '%*s' "$(( GAUGE_W - cells ))" ''
+	empty=${empty// /.}
+	printf -v pct '%3d%%' "$GAUGE_PCT"
+	GAUGE_LINE=" $C_DIM[$C_RESET$C_ACCENT$C_BOLD$bar$C_RESET$C_DIM$empty]$C_RESET $C_ACCENT$C_BOLD$pct$C_RESET  $C_BOLD$GAUGE_TEXT$C_RESET selected$C_DIM, plus package caches$C_RESET"
+}
+
+# cache level slider, [=====|-----] medium with the knob at CACHE_LEVEL,
+# sets SLIDER_PLAIN and SLIDER (colored)
+SLIDER_W=11
+slider() {
+	local i pos fill empty
+	for i in "${!CACHE_LEVELS[@]}"; do
+		[ "${CACHE_LEVELS[i]}" = "$CACHE_LEVEL" ] && break
+	done
+	pos=$(( i * (SLIDER_W - 1) / (${#CACHE_LEVELS[@]} - 1) ))
+	printf -v fill '%*s' "$pos" ''
+	fill=${fill// /=}
+	printf -v empty '%*s' "$(( SLIDER_W - 1 - pos ))" ''
+	empty=${empty// /-}
+	SLIDER_PLAIN="[$fill|$empty] $CACHE_LEVEL"
+	SLIDER="$C_DIM[$C_RESET$C_ACCENT$C_BOLD$fill$C_RESET$C_BOLD|$C_RESET$C_DIM$empty]$C_RESET $C_BOLD$CACHE_LEVEL$C_RESET"
+}
+
 # append a line to FRAME, \e[K clears what's left of the previous frame's line
 frame_line() {
 	FRAME+=$1$'\e[K\n'
 }
 
-# usage: draw_row ROW TICKED LABEL [SIZE]
+# usage: draw_row ROW TICKED LABEL [SIZE [STYLED]]
+# STYLED is LABEL with colors, used on ticked rows outside the cursor
+# the padding counts characters, printf's width would count bytes
 draw_row() {
-	local mark=' ' line
-	[ "$2" = 1 ] && mark=x
-	printf -v line ' [%s] %-42s %7s ' "$mark" "$3" "$4"
+	local label=$3 styled=${5:-$3} pad size
+	printf -v pad '%*s' "$(( 42 - ${#label} ))" ''
+	printf -v size '%7s' "$4"
 	if [ "$1" -eq "$CURSOR" ]; then
-		frame_line $'\e[7m'"$line"$'\e[0m'
+		local mark=' '
+		[ "$2" = 1 ] && mark=$TICK
+		frame_line "$C_CURSOR [$mark] $label$pad $size "$'\e[0m'
+	elif [ "$2" = 1 ]; then
+		frame_line " $C_DIM[$C_RESET$C_GREEN$C_BOLD$TICK$C_RESET$C_DIM]$C_RESET $styled$pad $C_YELLOW$size$C_RESET "
 	else
-		frame_line "$line"
+		frame_line " $C_DIM[ ] $label$pad $size$C_RESET "
 	fi
+}
+
+# key hints, usage: hints KEY DESC [KEY DESC...]
+hints() {
+	local line=
+	while [ $# -gt 0 ]; do
+		line+=" $C_ACCENT$C_BOLD$1$C_RESET $C_DIM$2$C_RESET "
+		shift 2
+	done
+	frame_line "$line"
 }
 
 # the frame is built in FRAME and written in one go over the old one,
 # clearing the screen first would make it flicker
 draw_menu() {
-	local i key size
+	local i key size line label styled
+	update_gauge
 	FRAME=$'\e[H'
-	if [ "$DRYRUN" = true ]; then
-		frame_line 'arch-cleanup (dry run, nothing will be removed)'
-	else
-		frame_line 'arch-cleanup'
-	fi
+	for i in "${!LOGO[@]}"; do
+		printf -v line ' %-14s' "${LOGO[i]}"
+		frame_line "$C_ACCENT$C_BOLD$line$C_RESET   ${HEADER[i]}"
+	done
+	frame_line ''
+	broom_lines
+	for line in "${BROOM_LINES[@]}"; do
+		frame_line "$line"
+	done
+	gauge_line
+	frame_line "$GAUGE_LINE"
 	frame_line ''
 	for i in "${!ITEMS[@]}"; do
 		key=${ITEMS[i]}
 		size=
 		[ -n "${SIZES[$key]}" ] && size=$(convert_human "${SIZES[$key]}")
-		draw_row "$i" "${SELECTED[$key]}" "$(item_label "$key")" "$size"
+		label=$(item_label "$key") styled=
+		if [ "$key" = cache ]; then
+			slider
+			styled="$label  $SLIDER"
+			label+="  $SLIDER_PLAIN"
+		fi
+		draw_row "$i" "${SELECTED[$key]}" "$label" "$size" "$styled"
 	done
 	frame_line ''
 	draw_row "$NOCONFIRM_ROW" "$([ "$NOCONFIRM" = true ] && echo 1)" "No-confirm (package managers won't ask)"
 	frame_line ''
-	frame_line " Selected: $(convert_human "$(selected_size)"), plus package caches"
-	frame_line ''
-	frame_line ' up/down move  space tick  a all/none  left/right cache level'
-	frame_line ' enter run  q quit'
+	hints up/down move space tick a all/none left/right 'cache level'
+	hints enter run q quit
 	printf '%s\e[J' "$FRAME"  # \e[J clears anything below the frame
+}
+
+# animation tick, rewrites only the broom and gauge rows
+draw_anim() {
+	local line out=
+	broom_lines
+	gauge_line
+	for line in "${BROOM_LINES[@]}" "$GAUGE_LINE"; do
+		out+=$line$'\e[K\n'
+	done
+	printf '\e[%d;1H%s' "$BROOM_ROW" "${out%$'\n'}"
 }
 
 tui_restore() {
 	printf '\e[?25h\e[?1049l'  # show cursor, leave alternate screen
 }
 
+menu_abort() {
+	tui_restore
+	trap - EXIT WINCH
+	echo "Aborted, nothing was removed."
+	exit 0
+}
+
 run_menu() {
-	local key rest i all
+	local key rest i all status redraw=true
 	CURSOR=0
 	trap tui_restore EXIT
+	trap 'redraw=true' WINCH  # terminal resized
 	printf '\e[?1049h\e[?25l'  # alternate screen, hide cursor
 	while true; do
-		draw_menu
-		IFS= read -rsn1 key
+		if [ "$redraw" = true ]; then
+			draw_menu
+			redraw=false
+		fi
+		# wait for a key, or time out and draw the next animation frame
+		status=0
+		IFS= read -rsn1 -t "$TICK_TIME" key || status=$?
+		if [ "$status" -gt 128 ]; then
+			broom_step
+			gauge_step
+			draw_anim
+			continue
+		elif [ "$status" -ne 0 ]; then
+			menu_abort  # input closed
+		fi
+		redraw=true
 		if [ "$key" = $'\e' ]; then
 			IFS= read -rsn2 -t 0.05 rest || true
 			key+=$rest
@@ -331,11 +592,11 @@ run_menu() {
 				update_cache_size
 				;;
 			'') break ;;  # enter
-			q|Q) tui_restore; trap - EXIT; echo "Aborted, nothing was removed."; exit 0 ;;
+			q|Q) menu_abort ;;
 		esac
 	done
 	tui_restore
-	trap - EXIT
+	trap - EXIT WINCH
 }
 
 if [ "$USE_TUI" = true ]; then
@@ -358,7 +619,7 @@ else
 	FLATPAK_FLAG=()
 fi
 
-echo "Total directory space to be freed: $(convert_human "$(selected_size)")"
+msg "Total directory space to be freed: $C_YELLOW$(convert_human "$(selected_size)")"
 
 # ask for the sudo password once upfront
 if [ "$DRYRUN" = false ]; then
@@ -370,7 +631,7 @@ SIZE_BEFORE=$(df --output=used -B1 / | tail -1)
 
 # pacman cache
 if confirm pacman "Clean pacman cache?"; then
-	echo "==> Cleaning pacman cache..."
+	msg "Cleaning pacman cache..."
 	if [ "$DRYRUN" = true ]; then
 		paccache -dk3 || step_failed "pacman cache"
 	else
@@ -380,7 +641,7 @@ fi
 
 #uninstalled package cache
 if confirm uninstalled "Remove uninstalled package cache?"; then
-	echo "==> Removing uninstalled package cache..."
+	msg "Removing uninstalled package cache..."
 	if [ "$DRYRUN" = true ]; then
 		paccache -duk0 || step_failed "uninstalled package cache"
 	else
@@ -390,52 +651,53 @@ fi
 
 #orphaned packages
 if confirm orphans "Remove orphaned packages?"; then
-	echo "==> Removing orphaned packages..."
+	msg "Removing orphaned packages..."
 	mapfile -t ORPHANS < <(pacman -Qtdq)
 	if [ ${#ORPHANS[@]} -gt 0 ]; then
 		run sudo pacman -Rns "${NOCONFIRM_FLAG[@]}" "${ORPHANS[@]}" || step_failed "orphaned packages"
 	else
-		echo "No orphans found."
+		echo "    ${C_DIM}No orphans found.$C_RESET"
 	fi
 fi
 
 #aur helper cache (-a: AUR only, the pacman cache is handled by paccache above)
-if [ -n "$AUR_HELPER" ]; then
-	if confirm aur "Clean $AUR_HELPER cache?"; then
-		echo "==> Cleaning $AUR_HELPER cache..."
-		run "$AUR_HELPER" -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "$AUR_HELPER cache"
+for helper in "${AUR_HELPERS[@]}"; do
+	if confirm "$helper" "Clean $helper cache?"; then
+		msg "Cleaning $helper cache..."
+		run "$helper" -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "$helper cache"
 	fi
-elif [ "$USE_TUI" = false ]; then
+done
+if [ ${#AUR_HELPERS[@]} -eq 0 ] && [ "$USE_TUI" = false ]; then
 	echo "No supported aur helpers found :("
 fi
 
 #flatpak
 if command -v flatpak >/dev/null; then
 	if confirm flatpak "Remove unused flatpak runtimes?"; then
-		echo "==> Removing unused flatpak runtimes..."
+		msg "Removing unused flatpak runtimes..."
 		run flatpak uninstall --unused "${FLATPAK_FLAG[@]}" || step_failed "flatpak"
 	fi
 fi
 
 #temp pacman
 if confirm pacman_tmp "Remove leftover pacman files?"; then
-	echo "==> Removing leftover pacman download temp dirs..."
+	msg "Removing leftover pacman download temp dirs..."
 	remove --sudo /var/cache/pacman/pkg/download-* || step_failed "leftover pacman files"
 fi
 
 #coredumps
 if confirm coredumps "Remove systemd coredumps?"; then
-	echo "==> Removing systemd coredumps..."
+	msg "Removing systemd coredumps..."
 	remove --sudo /var/lib/systemd/coredump/* || step_failed "coredumps"
 fi
 
 #~/.cache
 if confirm cache "Clean system cache (level: $CACHE_LEVEL)?"; then
-	echo "==> Cleaning system cache (level: $CACHE_LEVEL)..."
+	msg "Cleaning system cache (level: $CACHE_LEVEL)..."
 	case $CACHE_LEVEL in
 		low)
 			if [ "$DRYRUN" = true ]; then
-				echo "    [dry-run] would remove $(find_old_cache -printf '.' | wc -c) file(s) older than $CACHE_AGE days, $(convert_human "$(cache_size)")"
+				echo "    $C_YELLOW[dry-run]$C_RESET would remove $(find_old_cache -printf '.' | wc -c) file(s) older than $CACHE_AGE days, $(convert_human "$(cache_size)")"
 			else
 				find_old_cache -delete || step_failed "system cache"
 			fi
@@ -452,22 +714,22 @@ fi
 
 #trash
 if confirm trash "Clean system trash?"; then
-	echo "==> Cleaning system trash (${#TRASH_DIRS[@]} location(s))..."
+	msg "Cleaning system trash (${#TRASH_DIRS[@]} location(s))..."
 	remove "${TRASH_CONTENTS[@]}" || step_failed "system trash"
 fi
 
 # readout size
 if [ "$DRYRUN" = true ]; then
-	echo "==> Dry run, nothing was removed."
+	msg "${C_YELLOW}Dry run, nothing was removed."
 else
 	SIZE_AFTER=$(df --output=used -B1 / | tail -1)
 	SIZE_FREED=$(( SIZE_BEFORE - SIZE_AFTER ))
-	echo "==> Total space freed: $(convert_human "$SIZE_FREED")"
+	msg "Total space freed: $C_GREEN$(convert_human "$SIZE_FREED")"
 fi
 
 # failed steps summary
 if [ ${#FAILED[@]} -gt 0 ]; then
-	echo "==> Steps that did not complete:" >&2
+	echo "$C_ERR==> Steps that did not complete:${C_ERR:+$C_RESET}" >&2
 	printf '    %s\n' "${FAILED[@]}" >&2
 	exit 1
 fi
