@@ -3,23 +3,54 @@
 set -e  # stop on first error
 shopt -s nullglob dotglob  # unmatched globs expand to nothing, * matches dotfiles
 
+# ~/.cache entries kept at cache levels low and medium (shader caches are slow to rebuild)
+KEEP_CACHES=(mesa_shader_cache mesa_shader_cache_db nvidia 'qtshadercache-*')
+# at cache level low, only remove files not modified in this many days
+CACHE_AGE=30
+
 usage() {
-	echo "Usage: $0 [-y] [-n] [-h]"
-	echo "  -y  don't ask for confirmation"
-	echo "  -n  dry run, show what would be removed without removing it"
-	echo "  -h  show this help"
+	echo "Usage: $0 [-y] [-n] [-c LEVEL] [-h]"
+	echo "  -y        don't ask for confirmation"
+	echo "  -n        dry run, show what would be removed without removing it"
+	echo "  -c LEVEL  how much of ~/.cache to remove:"
+	echo "              low     files older than $CACHE_AGE days, keep shader caches (default)"
+	echo "              medium  everything except shader caches"
+	echo "              high    everything"
+	echo "  -h        show this help"
 }
 
 NOCONFIRM=false
 DRYRUN=false
-while getopts "ynh" opt; do
+CACHE_LEVEL=low
+while getopts "ync:h" opt; do
 	case $opt in
 		y) NOCONFIRM=true ;;
 		n) DRYRUN=true ;;
+		c) CACHE_LEVEL=$OPTARG ;;
 		h) usage; exit 0 ;;
 		*) usage >&2; exit 1 ;;
 	esac
 done
+
+case $CACHE_LEVEL in
+	low|medium|high) ;;
+	*) echo "Invalid cache level: $CACHE_LEVEL" >&2; usage >&2; exit 1 ;;
+esac
+
+# safety checks
+if [ "$EUID" -eq 0 ]; then
+	echo "Don't run as root, run as your normal user (sudo is used where needed)." >&2
+	exit 1
+fi
+if ! command -v paccache >/dev/null; then
+	echo "paccache not found, install it with: sudo pacman -S pacman-contrib" >&2
+	exit 1
+fi
+if [ -e /var/lib/pacman/db.lck ]; then
+	echo "pacman is running (/var/lib/pacman/db.lck exists), try again when it's done." >&2
+	echo "If no pacman is running, remove the stale lock with: sudo rm /var/lib/pacman/db.lck" >&2
+	exit 1
+fi
 
 if [ "$NOCONFIRM" = true ]; then
 	NOCONFIRM_FLAG=(--noconfirm)
@@ -37,7 +68,7 @@ confirm() {
 	fi
 
 	#prompt
-	read -p "$1 [Y/n]: " answer
+	read -rp "$1 [Y/n]: " answer
 	if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
 		return 1
 	fi
@@ -84,6 +115,39 @@ remove() {
 	fi
 }
 
+# ~/.cache entries outside KEEP_CACHES
+cache_entries() {
+	local entry name keep
+	for entry in ~/.cache/*; do
+		name=${entry##*/}
+		for keep in "${KEEP_CACHES[@]}"; do
+			# shellcheck disable=SC2053  # unquoted on purpose, KEEP_CACHES can hold globs
+			[[ $name == $keep ]] && continue 2
+		done
+		echo "$entry"
+	done
+}
+
+# find files older than CACHE_AGE days in ~/.cache entries outside KEEP_CACHES,
+# extra args are the find action (-printf, -delete, ...)
+# mtime is used because atime is not updated on noatime mounts
+find_old_cache() {
+	local entries
+	mapfile -t entries < <(cache_entries)
+	[ ${#entries[@]} -eq 0 ] && return 0
+	find "${entries[@]}" -type f -mtime +"$CACHE_AGE" "$@"
+}
+
+# bytes ~/.cache cleaning would free at CACHE_LEVEL
+cache_size() {
+	local entries
+	case $CACHE_LEVEL in
+		low) find_old_cache -printf '%s\n' | awk '{ s += $1 } END { print s + 0 }' ;;
+		medium) mapfile -t entries < <(cache_entries); get_size "${entries[@]}" ;;
+		high) get_size ~/.cache/* ;;
+	esac
+}
+
 # trash dirs: home trash + .Trash-$UID / .Trash/$UID on mounted drives
 TRASH_DIRS=(~/.local/share/Trash)
 while IFS= read -r mnt; do
@@ -98,13 +162,19 @@ for dir in "${TRASH_DIRS[@]}"; do
 	TRASH_CONTENTS+=("$dir"/files/* "$dir"/info/* "$dir"/expunged/*)
 done
 
-DIRSIZE=$(get_size \
-	/var/cache/pacman/pkg/download-* \
-	~/.cache \
-	"${TRASH_CONTENTS[@]}" \
-	/var/lib/systemd/coredump/* \
-)
+DIRSIZE=$(( \
+	$(get_size \
+		/var/cache/pacman/pkg/download-* \
+		"${TRASH_CONTENTS[@]}" \
+		/var/lib/systemd/coredump/*) + \
+	$(cache_size) \
+))
 echo "Total directory space to be freed: $(convert_human "$DIRSIZE")"
+
+# ask for the sudo password once upfront
+if [ "$DRYRUN" = false ]; then
+	sudo -v
+fi
 
 # get total size of system
 SIZE_BEFORE=$(df --output=used -B1 / | tail -1)
@@ -132,9 +202,9 @@ fi
 #orphaned packages
 if confirm "Remove orphaned packages?"; then
 	echo "==> Removing orphaned packages..."
-	ORPHANS=$(pacman -Qtdq) || true
-	if [ -n "$ORPHANS" ]; then
-		run sudo pacman -Rns "${NOCONFIRM_FLAG[@]}" $ORPHANS
+	mapfile -t ORPHANS < <(pacman -Qtdq)
+	if [ ${#ORPHANS[@]} -gt 0 ]; then
+		run sudo pacman -Rns "${NOCONFIRM_FLAG[@]}" "${ORPHANS[@]}"
 	else
 		echo "No orphans found."
 	fi
@@ -179,9 +249,24 @@ if confirm "Remove systemd coredumps?"; then
 fi
 
 #~/.cache
-if confirm "Clean system cache?"; then
-	echo "==> Cleaning system cache..."
-	remove ~/.cache/*
+if confirm "Clean system cache (level: $CACHE_LEVEL)?"; then
+	echo "==> Cleaning system cache (level: $CACHE_LEVEL)..."
+	case $CACHE_LEVEL in
+		low)
+			if [ "$DRYRUN" = true ]; then
+				echo "    [dry-run] would remove $(find_old_cache -printf '.' | wc -c) file(s) older than $CACHE_AGE days, $(convert_human "$(cache_size)")"
+			else
+				find_old_cache -delete || echo "    Some files could not be removed."
+			fi
+			;;
+		medium)
+			mapfile -t CACHE_ENTRIES < <(cache_entries)
+			remove "${CACHE_ENTRIES[@]}"
+			;;
+		high)
+			remove ~/.cache/*
+			;;
+	esac
 fi
 
 #trash
