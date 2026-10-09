@@ -36,14 +36,22 @@ error() {
 	echo "${C_ERR}error:${C_ERR:+$C_RESET} $*" >&2
 }
 
+cache_level_desc() {
+	case $1 in
+		low) echo "files older than $CACHE_AGE days, keep shader caches" ;;
+		medium) echo "everything except shader caches" ;;
+		high) echo "everything, shader caches included" ;;
+	esac
+}
+
 usage() {
 	echo "Usage: $0 [-y] [-n] [-c LEVEL] [-h]"
 	echo "  -y        don't ask, run every step without the checklist"
 	echo "  -n        dry run, show what would be removed without removing it"
 	echo "  -c LEVEL  how much of ~/.cache to remove:"
-	echo "              low     files older than $CACHE_AGE days, keep shader caches"
-	echo "              medium  everything except shader caches (default)"
-	echo "              high    everything"
+	echo "              low     $(cache_level_desc low)"
+	echo "              medium  $(cache_level_desc medium) (default)"
+	echo "              high    $(cache_level_desc high)"
 	echo "  -h        show this help"
 }
 
@@ -226,6 +234,27 @@ item_label() {
 		coredumps) echo "Remove systemd coredumps" ;;
 		cache) echo "Clean ~/.cache" ;;
 		trash) echo "Clean system trash" ;;
+	esac
+}
+
+# sets DESC, two lines about a checklist item (or noconfirm), shown under
+# the checklist for the row at the cursor
+item_desc() {
+	case $1 in
+		pacman) DESC=("Old package versions in /var/cache/pacman/pkg," "keeps the newest 3 of each so you can downgrade.") ;;
+		uninstalled) DESC=("Cached packages of software no longer installed," "reinstalling one later means downloading it again.") ;;
+		orphans) DESC=("Packages installed as dependencies that nothing needs" "anymore, removed with pacman -Rns.") ;;
+		paru|yay) DESC=("AUR build files $1 keeps around, the pacman cache" "is left to the steps above.") ;;
+		flatpak) DESC=("Runtimes and extensions no installed app uses," "same as flatpak uninstall --unused.") ;;
+		pacman_tmp) DESC=("Temp dirs left behind by interrupted downloads," "the download-* dirs in /var/cache/pacman/pkg.") ;;
+		coredumps) DESC=("Crash dumps saved by systemd-coredump, only needed" "to debug a crash after the fact.") ;;
+		cache) DESC=("App caches in ~/.cache, apps rebuild them as needed." "$C_RESET$C_BOLD$CACHE_LEVEL:$C_RESET$C_DIM $(cache_level_desc "$CACHE_LEVEL")") ;;
+		trash)
+			local where="${#TRASH_DIRS[@]} locations"
+			[ ${#TRASH_DIRS[@]} -eq 1 ] && where="1 location"
+			DESC=("Files in the trash, at home and on mounted drives" "($where), they can't be restored afterwards.")
+			;;
+		noconfirm) DESC=("Passes --noconfirm to pacman and AUR helpers, -y to" "flatpak, otherwise they list what they remove and ask.") ;;
 	esac
 }
 
@@ -504,6 +533,15 @@ draw_menu() {
 	done
 	frame_line ''
 	draw_row "$NOCONFIRM_ROW" "$([ "$NOCONFIRM" = true ] && echo 1)" "No-confirm (package managers won't ask)"
+	frame_line ''
+	if [ "$CURSOR" -eq "$NOCONFIRM_ROW" ]; then
+		item_desc noconfirm
+	else
+		item_desc "${ITEMS[CURSOR]}"
+	fi
+	for line in "${DESC[@]}"; do
+		frame_line " $C_DIM$line$C_RESET"
+	done
 	frame_line ''
 	hints up/down move space tick a all/none left/right 'cache level'
 	hints enter run q quit
