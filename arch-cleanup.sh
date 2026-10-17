@@ -145,6 +145,39 @@ convert_human() {
 	numfmt --to=iec -- "$1"
 }
 
+# total installed size of all packages in bytes
+installed_size() {
+	LC_ALL=C pacman -Qi | awk '
+		/^Installed Size/ {
+			m = 1
+			if ($5 == "KiB") m = 1024
+			else if ($5 == "MiB") m = 1024 ^ 2
+			else if ($5 == "GiB") m = 1024 ^ 3
+			else if ($5 == "TiB") m = 1024 ^ 4
+			s += $4 * m
+		}
+		END { printf "%d\n", s }'
+}
+
+# bytes freed across the run, each step adds how much what it cleans shrank,
+# df would also count snapshots holding on to removed files, btrfs freeing
+# space in the background and anything else writing to the disk meanwhile
+FREED=0
+# usage: measure SIZE_CMD [ARGS...], prints 0 in dry-run mode where nothing is freed
+measure() {
+	if [ "$DRYRUN" = true ]; then
+		echo 0
+	else
+		"$@"
+	fi
+}
+# usage: add_freed BEFORE AFTER
+add_freed() {
+	if (( $1 > $2 )); then
+		FREED=$(( FREED + $1 - $2 ))
+	fi
+}
+
 # remove paths, or just report their size in dry-run mode
 # usage: remove [--sudo] paths...
 remove() {
@@ -206,10 +239,18 @@ while IFS= read -r mnt; do
 	done
 done < <(findmnt -rno TARGET)
 
-TRASH_CONTENTS=()
-for dir in "${TRASH_DIRS[@]}"; do
-	TRASH_CONTENTS+=("$dir"/files/* "$dir"/info/* "$dir"/expunged/*)
-done
+# sets TRASH_CONTENTS, everything inside the trash dirs
+trash_contents() {
+	local dir
+	TRASH_CONTENTS=()
+	for dir in "${TRASH_DIRS[@]}"; do
+		TRASH_CONTENTS+=("$dir"/files/* "$dir"/info/* "$dir"/expunged/*)
+	done
+}
+trash_contents
+
+# flatpak installs, system and user
+FLATPAK_DIRS=(/var/lib/flatpak ~/.local/share/flatpak)
 
 # every installed AUR helper gets its own step, the item key is its name
 AUR_HELPERS=()
@@ -664,35 +705,42 @@ if [ "$DRYRUN" = false ]; then
 	sudo -v
 fi
 
-# get total size of system
-SIZE_BEFORE=$(df --output=used -B1 / | tail -1)
-
 # pacman cache
 if confirm pacman "Clean pacman cache?"; then
 	msg "Cleaning pacman cache..."
+	before=$(measure get_size /var/cache/pacman/pkg)
 	if [ "$DRYRUN" = true ]; then
 		paccache -dk3 || step_failed "pacman cache"
 	else
 		paccache -rk3 || step_failed "pacman cache"
 	fi
+	add_freed "$before" "$(measure get_size /var/cache/pacman/pkg)"
 fi
 
 #uninstalled package cache
 if confirm uninstalled "Remove uninstalled package cache?"; then
 	msg "Removing uninstalled package cache..."
+	before=$(measure get_size /var/cache/pacman/pkg)
 	if [ "$DRYRUN" = true ]; then
 		paccache -duk0 || step_failed "uninstalled package cache"
 	else
 		paccache -ruk0 || step_failed "uninstalled package cache"
 	fi
+	add_freed "$before" "$(measure get_size /var/cache/pacman/pkg)"
 fi
 
 #orphaned packages
+REMOVED_PACKAGES=false
 if confirm orphans "Remove orphaned packages?"; then
 	msg "Removing orphaned packages..."
 	mapfile -t ORPHANS < <(pacman -Qtdq)
 	if [ ${#ORPHANS[@]} -gt 0 ]; then
+		# measured across all packages since -s also removes their unneeded deps
+		before=$(measure installed_size)
 		run sudo pacman -Rns "${NOCONFIRM_FLAG[@]}" "${ORPHANS[@]}" || step_failed "orphaned packages"
+		after=$(measure installed_size)
+		(( before > after )) && REMOVED_PACKAGES=true
+		add_freed "$before" "$after"
 	else
 		echo "    ${C_DIM}No orphans found.$C_RESET"
 	fi
@@ -702,7 +750,9 @@ fi
 for helper in "${AUR_HELPERS[@]}"; do
 	if confirm "$helper" "Clean $helper cache?"; then
 		msg "Cleaning $helper cache..."
+		before=$(measure get_size ~/.cache/"$helper")
 		run "$helper" -Sca "${NOCONFIRM_FLAG[@]}" || step_failed "$helper cache"
+		add_freed "$before" "$(measure get_size ~/.cache/"$helper")"
 	fi
 done
 if [ ${#AUR_HELPERS[@]} -eq 0 ] && [ "$USE_TUI" = false ]; then
@@ -713,25 +763,32 @@ fi
 if command -v flatpak >/dev/null; then
 	if confirm flatpak "Remove unused flatpak runtimes?"; then
 		msg "Removing unused flatpak runtimes..."
+		before=$(measure get_size "${FLATPAK_DIRS[@]}")
 		run flatpak uninstall --unused "${FLATPAK_FLAG[@]}" || step_failed "flatpak"
+		add_freed "$before" "$(measure get_size "${FLATPAK_DIRS[@]}")"
 	fi
 fi
 
 #temp pacman
 if confirm pacman_tmp "Remove leftover pacman files?"; then
 	msg "Removing leftover pacman download temp dirs..."
+	before=$(measure get_size /var/cache/pacman/pkg/download-*)
 	remove --sudo /var/cache/pacman/pkg/download-* || step_failed "leftover pacman files"
+	add_freed "$before" "$(measure get_size /var/cache/pacman/pkg/download-*)"
 fi
 
 #coredumps
 if confirm coredumps "Remove systemd coredumps?"; then
 	msg "Removing systemd coredumps..."
+	before=$(measure get_size /var/lib/systemd/coredump/*)
 	remove --sudo /var/lib/systemd/coredump/* || step_failed "coredumps"
+	add_freed "$before" "$(measure get_size /var/lib/systemd/coredump/*)"
 fi
 
 #~/.cache
 if confirm cache "Clean system cache (level: $CACHE_LEVEL)?"; then
 	msg "Cleaning system cache (level: $CACHE_LEVEL)..."
+	before=$(measure cache_size)
 	case $CACHE_LEVEL in
 		low)
 			if [ "$DRYRUN" = true ]; then
@@ -748,21 +805,41 @@ if confirm cache "Clean system cache (level: $CACHE_LEVEL)?"; then
 			remove ~/.cache/* || step_failed "system cache"
 			;;
 	esac
+	add_freed "$before" "$(measure cache_size)"
 fi
 
 #trash
 if confirm trash "Clean system trash?"; then
 	msg "Cleaning system trash (${#TRASH_DIRS[@]} location(s))..."
+	trash_contents  # pick up anything trashed while the checklist was open
+	before=$(measure get_size "${TRASH_CONTENTS[@]}")
 	remove "${TRASH_CONTENTS[@]}" || step_failed "system trash"
+	if [ "$DRYRUN" = false ]; then
+		# directorysizes caches the size of trashed dirs, stale once they're gone
+		for dir in "${TRASH_DIRS[@]}"; do
+			rm -f -- "$dir/directorysizes"
+		done
+		# KDE keeps its own empty/full state in trashrc, emptying through
+		# ktrash updates it, otherwise the trash still shows as full
+		if command -v ktrash6 >/dev/null; then
+			ktrash6 --empty >/dev/null 2>&1 || true
+		elif command -v ktrash5 >/dev/null; then
+			ktrash5 --empty >/dev/null 2>&1 || true
+		fi
+	fi
+	trash_contents
+	add_freed "$before" "$(measure get_size "${TRASH_CONTENTS[@]}")"
 fi
 
 # readout size
 if [ "$DRYRUN" = true ]; then
 	msg "${C_YELLOW}Dry run, nothing was removed."
 else
-	SIZE_AFTER=$(df --output=used -B1 / | tail -1)
-	SIZE_FREED=$(( SIZE_BEFORE - SIZE_AFTER ))
-	msg "Total space freed: $C_GREEN$(convert_human "$SIZE_FREED")"
+	msg "Total space freed: $C_GREEN$(convert_human "$FREED")"
+	# snap-pac snapshots around pacman -Rns keep the removed files on disk
+	if [ "$REMOVED_PACKAGES" = true ] && command -v snapper >/dev/null; then
+		echo "    ${C_DIM}Removed packages stay on disk in snapper snapshots until those are cleaned up.$C_RESET"
+	fi
 fi
 
 # failed steps summary
