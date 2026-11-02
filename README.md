@@ -4,7 +4,7 @@ A simple cleanup script for Arch-based systems
 
 ## What it does
 
-- Clears old pacman package cache (keeps last 3)
+- Clears old pacman package cache with adjustable aggressiveness (see `-p`)
 - Removes uninstalled package cache
 - Removes orphaned packages
 - Cleans the AUR cache of paru and/or yay, whichever are installed (AUR only, the pacman cache is handled by `paccache`)
@@ -47,6 +47,7 @@ arch-cleanup       # interactive checklist
 arch-cleanup -y    # noconfirm, run every step
 arch-cleanup -n    # dry run, nothing is removed
 arch-cleanup -n -y # dry run without prompts
+arch-cleanup -p medium # keep only the newest version of each package
 arch-cleanup -c high # remove all of ~/.cache
 arch-cleanup -h    # help
 ```
@@ -60,13 +61,21 @@ Run in a terminal without `-y`, the script opens a checklist of the steps that a
 | `↑`/`↓` or `k`/`j` | move |
 | `space` | tick/untick |
 | `a` | tick/untick all |
-| `←`/`→` or `h`/`l` | move the `~/.cache` level slider |
+| `←`/`→` or `h`/`l` | move the level slider of the pacman cache or `~/.cache` step at the cursor |
 | `enter` | run the ticked steps |
 | `q` | quit without removing anything |
 
-Under the list, a short description explains the step at the cursor (for the `~/.cache` step, also what the selected level removes). Steps with a known size show it next to them, and a gauge above the list shows the total for the ticked steps out of everything the list can free. The package cache steps (`paccache`, orphans, AUR, flatpak) aren't included in that total. When input isn't a terminal (e.g. piped), the script falls back to Y/n prompts.
+Under the list, a short description explains the step at the cursor (for the pacman cache and `~/.cache` steps, also what the selected level removes). Steps with a known size show it next to them, and a gauge above the list shows the total for the ticked steps out of everything the list can free. The package cache steps (`paccache`, orphans, AUR, flatpak) aren't included in that total. When input isn't a terminal (e.g. piped), the script falls back to Y/n prompts.
 
 Output is colored when it goes to a terminal. Set `NO_COLOR=1` to turn colors off. Without a UTF-8 locale, the checklist uses plain ASCII characters.
+
+### Pacman cache levels (`-p`)
+
+| Level | Removes from `/var/cache/pacman/pkg` |
+|---|---|
+| `low` (default) | all but the newest 3 versions of each package (`paccache -rk3`) |
+| `medium` | all but the newest version of each package (`paccache -rk1`) |
+| `high` | everything, installed versions included (`paccache -rk0`), so you can't downgrade or reinstall offline |
 
 ### Cache levels (`-c`)
 

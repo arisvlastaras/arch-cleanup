@@ -36,6 +36,22 @@ error() {
 	echo "${C_ERR}error:${C_ERR:+$C_RESET} $*" >&2
 }
 
+# pacman cache levels, how many versions of each package paccache keeps
+pacman_keep() {
+	case $1 in
+		low) echo 3 ;;
+		medium) echo 1 ;;
+		high) echo 0 ;;
+	esac
+}
+pacman_level_desc() {
+	case $1 in
+		low) echo "keep the newest 3 versions of each package" ;;
+		medium) echo "keep only the newest version of each package" ;;
+		high) echo "everything, even the installed versions" ;;
+	esac
+}
+
 cache_level_desc() {
 	case $1 in
 		low) echo "files older than $CACHE_AGE days, keep shader caches" ;;
@@ -45,9 +61,13 @@ cache_level_desc() {
 }
 
 usage() {
-	echo "Usage: $0 [-y] [-n] [-c LEVEL] [-h]"
+	echo "Usage: $0 [-y] [-n] [-p LEVEL] [-c LEVEL] [-h]"
 	echo "  -y        don't ask, run every step without the checklist"
 	echo "  -n        dry run, show what would be removed without removing it"
+	echo "  -p LEVEL  how much of the pacman cache to remove:"
+	echo "              low     $(pacman_level_desc low) (default)"
+	echo "              medium  $(pacman_level_desc medium)"
+	echo "              high    $(pacman_level_desc high)"
 	echo "  -c LEVEL  how much of ~/.cache to remove:"
 	echo "              low     $(cache_level_desc low)"
 	echo "              medium  $(cache_level_desc medium) (default)"
@@ -57,17 +77,23 @@ usage() {
 
 NOCONFIRM=false
 DRYRUN=false
+PACMAN_LEVEL=low
 CACHE_LEVEL=medium
-while getopts "ync:h" opt; do
+while getopts "ynp:c:h" opt; do
 	case $opt in
 		y) NOCONFIRM=true ;;
 		n) DRYRUN=true ;;
+		p) PACMAN_LEVEL=$OPTARG ;;
 		c) CACHE_LEVEL=$OPTARG ;;
 		h) usage; exit 0 ;;
 		*) usage >&2; exit 1 ;;
 	esac
 done
 
+case $PACMAN_LEVEL in
+	low|medium|high) ;;
+	*) error "Invalid pacman cache level: $PACMAN_LEVEL"; usage >&2; exit 1 ;;
+esac
 case $CACHE_LEVEL in
 	low|medium|high) ;;
 	*) error "Invalid cache level: $CACHE_LEVEL"; usage >&2; exit 1 ;;
@@ -266,7 +292,7 @@ ITEMS+=(pacman_tmp coredumps cache trash)
 
 item_label() {
 	case $1 in
-		pacman) echo "Clean pacman cache (keep last 3)" ;;
+		pacman) echo "Clean pacman cache" ;;
 		uninstalled) echo "Remove uninstalled package cache" ;;
 		orphans) echo "Remove orphaned packages" ;;
 		paru|yay) echo "Clean $1 cache" ;;
@@ -282,7 +308,7 @@ item_label() {
 # the checklist for the row at the cursor
 item_desc() {
 	case $1 in
-		pacman) DESC=("Old package versions in /var/cache/pacman/pkg," "keeps the newest 3 of each so you can downgrade.") ;;
+		pacman) DESC=("Old packages in /var/cache/pacman/pkg, for downgrading." "$C_RESET$C_BOLD$PACMAN_LEVEL:$C_RESET$C_DIM $(pacman_level_desc "$PACMAN_LEVEL")") ;;
 		uninstalled) DESC=("Cached packages of software no longer installed," "reinstalling one later means downloading it again.") ;;
 		orphans) DESC=("Packages installed as dependencies that nothing needs" "anymore, removed with pacman -Rns.") ;;
 		paru|yay) DESC=("AUR build files $1 keeps around, the pacman cache" "is left to the steps above.") ;;
@@ -328,9 +354,12 @@ selected_size() {
 	echo "$total"
 }
 
-# checklist ui, arrow keys or j/k to move, space to tick, enter to run
+# checklist ui, arrow keys or j/k to move, space to tick, left/right to
+# change the level of the row at the cursor, enter to run
 # rows are the ITEMS, then the no-confirm option
-CACHE_LEVELS=(low medium high)
+LEVELS=(low medium high)
+# items with a level slider and the variable holding their level
+declare -A LEVEL_VAR=([pacman]=PACMAN_LEVEL [cache]=CACHE_LEVEL)
 NOCONFIRM_ROW=${#ITEMS[@]}
 ROWS=$(( ${#ITEMS[@]} + 1 ))
 
@@ -492,21 +521,28 @@ gauge_line() {
 	GAUGE_LINE=" $C_DIM[$C_RESET$C_ACCENT$C_BOLD$bar$C_RESET$C_DIM$empty]$C_RESET $C_ACCENT$C_BOLD$pct$C_RESET  $C_BOLD$GAUGE_TEXT$C_RESET selected$C_DIM, plus package caches$C_RESET"
 }
 
-# cache level slider, [=====|-----] medium with the knob at CACHE_LEVEL,
-# sets SLIDER_PLAIN and SLIDER (colored)
+# index of a level in LEVELS
+level_index() {
+	local i
+	for i in "${!LEVELS[@]}"; do
+		[ "${LEVELS[i]}" = "$1" ] && break
+	done
+	echo "$i"
+}
+
+# level slider, [=====|-----] medium with the knob at LEVEL,
+# usage: slider LEVEL, sets SLIDER_PLAIN and SLIDER (colored)
 SLIDER_W=11
 slider() {
-	local i pos fill empty
-	for i in "${!CACHE_LEVELS[@]}"; do
-		[ "${CACHE_LEVELS[i]}" = "$CACHE_LEVEL" ] && break
-	done
-	pos=$(( i * (SLIDER_W - 1) / (${#CACHE_LEVELS[@]} - 1) ))
+	local level=$1 i pos fill empty
+	i=$(level_index "$level")
+	pos=$(( i * (SLIDER_W - 1) / (${#LEVELS[@]} - 1) ))
 	printf -v fill '%*s' "$pos" ''
 	fill=${fill// /=}
 	printf -v empty '%*s' "$(( SLIDER_W - 1 - pos ))" ''
 	empty=${empty// /-}
-	SLIDER_PLAIN="[$fill|$empty] $CACHE_LEVEL"
-	SLIDER="$C_DIM[$C_RESET$C_ACCENT$C_BOLD$fill$C_RESET$C_BOLD|$C_RESET$C_DIM$empty]$C_RESET $C_BOLD$CACHE_LEVEL$C_RESET"
+	SLIDER_PLAIN="[$fill|$empty] $level"
+	SLIDER="$C_DIM[$C_RESET$C_ACCENT$C_BOLD$fill$C_RESET$C_BOLD|$C_RESET$C_DIM$empty]$C_RESET $C_BOLD$level$C_RESET"
 }
 
 # append a line to FRAME, \e[K clears what's left of the previous frame's line
@@ -565,8 +601,10 @@ draw_menu() {
 		size=
 		[ -n "${SIZES[$key]}" ] && size=$(convert_human "${SIZES[$key]}")
 		label=$(item_label "$key") styled=
-		if [ "$key" = cache ]; then
-			slider
+		if [ -n "${LEVEL_VAR[$key]}" ]; then
+			# padded so the sliders line up
+			printf -v label '%-18s' "$label"
+			slider "${!LEVEL_VAR[$key]}"
 			styled="$label  $SLIDER"
 			label+="  $SLIDER_PLAIN"
 		fi
@@ -584,7 +622,7 @@ draw_menu() {
 		frame_line " $C_DIM$line$C_RESET"
 	done
 	frame_line ''
-	hints up/down move space tick a all/none left/right 'cache level'
+	hints up/down move space tick a all/none left/right level
 	hints enter run q quit
 	printf '%s\e[J' "$FRAME"  # \e[J clears anything below the frame
 }
@@ -612,7 +650,7 @@ menu_abort() {
 }
 
 run_menu() {
-	local key rest i all status redraw=true
+	local key rest i all var status redraw=true
 	CURSOR=0
 	trap tui_restore EXIT
 	trap 'redraw=true' WINCH  # terminal resized
@@ -660,15 +698,17 @@ run_menu() {
 				done
 				;;
 			$'\e[C'|$'\e[D'|l|h)
-				for i in "${!CACHE_LEVELS[@]}"; do
-					[ "${CACHE_LEVELS[i]}" = "$CACHE_LEVEL" ] && break
-				done
+				# only rows with a level slider
+				[ "$CURSOR" -eq "$NOCONFIRM_ROW" ] && continue
+				var=${LEVEL_VAR[${ITEMS[CURSOR]}]}
+				[ -z "$var" ] && continue
+				i=$(level_index "${!var}")
 				case $key in
 					$'\e[C'|l) i=$(( i < 2 ? i + 1 : 2 )) ;;
 					*) i=$(( i > 0 ? i - 1 : 0 )) ;;
 				esac
-				CACHE_LEVEL=${CACHE_LEVELS[i]}
-				update_cache_size
+				printf -v "$var" '%s' "${LEVELS[i]}"
+				[ "$var" = CACHE_LEVEL ] && update_cache_size
 				;;
 			'') break ;;  # enter
 			q|Q) menu_abort ;;
@@ -706,13 +746,14 @@ if [ "$DRYRUN" = false ]; then
 fi
 
 # pacman cache
-if confirm pacman "Clean pacman cache?"; then
-	msg "Cleaning pacman cache..."
+if confirm pacman "Clean pacman cache (level: $PACMAN_LEVEL)?"; then
+	PACMAN_KEEP=$(pacman_keep "$PACMAN_LEVEL")
+	msg "Cleaning pacman cache (level: $PACMAN_LEVEL, keep $PACMAN_KEEP)..."
 	before=$(measure get_size /var/cache/pacman/pkg)
 	if [ "$DRYRUN" = true ]; then
-		paccache -dk3 || step_failed "pacman cache"
+		paccache -dk"$PACMAN_KEEP" || step_failed "pacman cache"
 	else
-		paccache -rk3 || step_failed "pacman cache"
+		paccache -rk"$PACMAN_KEEP" || step_failed "pacman cache"
 	fi
 	add_freed "$before" "$(measure get_size /var/cache/pacman/pkg)"
 fi
